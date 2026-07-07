@@ -1,5 +1,4 @@
 import { EventStreamCodec } from "@smithy/eventstream-codec"
-import { fromUtf8, toUtf8 } from "@smithy/util-utf8"
 import { Effect, Stream } from "effect"
 import type { Framing } from "../route/framing"
 import { ProviderShared } from "./shared"
@@ -8,7 +7,24 @@ import { ProviderShared } from "./shared"
 // frame is `[length:4][headers-length:4][prelude-crc:4][headers][payload][crc:4]`.
 // We use `@smithy/eventstream-codec` to validate framing and CRCs, then
 // reconstruct the JSON wrapping by `:event-type` so the chunk schema can match.
-const eventCodec = new EventStreamCodec(toUtf8, fromUtf8)
+//
+// `EventStreamCodec` takes its own `toUtf8`/`fromUtf8` codec functions.
+// `@smithy/util-utf8`'s Node build resolves `fromArrayBuffer`/`fromString`
+// through `@smithy/util-buffer-from` -> `@smithy/core/serde`. Our release
+// binary is bundled with `Bun.build({ conditions: ["browser"] })` (see
+// packages/opencode/script/build.ts); under that condition the minifier turns
+// that call into a dead binding ("X is not a function. (In 'X(...)', 'X' is a
+// Symbol)"), which `EventStreamCodec.decode` swallows as a header-parsing
+// failure — every Bedrock Converse response then silently decodes to zero
+// chunks. Implementing the codec with `TextEncoder`/`TextDecoder` directly
+// (what `@smithy/util-utf8`'s own browser build does) sidesteps that
+// resolution path regardless of which `@smithy/*` versions are hoisted.
+const eventStreamToUtf8 = (input: string | Uint8Array): string => {
+  if (typeof input === "string") return input
+  return new TextDecoder("utf-8").decode(input)
+}
+const eventStreamFromUtf8 = (input: string): Uint8Array => new TextEncoder().encode(input)
+const eventCodec = new EventStreamCodec(eventStreamToUtf8, eventStreamFromUtf8)
 const utf8 = new TextDecoder()
 
 // Cursor-tracking buffer state. Bytes accumulate in `buffer`; `offset` is the
